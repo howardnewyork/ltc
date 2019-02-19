@@ -1,15 +1,36 @@
-# Predictive Analytics in Long-Term Care
+---
+title: "Predictive Analytics in Long-Term Care"
+output: 
+  html_notebook: 
+    toc: yes
+---
 
-This repository provides the code and data used for Chapter 13, "Predictive Analytics in Long-Term Care" to be published by Springer in the book Actuarial Aspects of Long-Term Care.
-
-For more information, contact Howard Zail [info@elucidor.com](mailto:info@elucidor.com)
 
 
-# Requirements
+# Prepare Notebook
 
-A number of  packages are required and can be installed using
+Run this "Prepare Notebook"" section before any of the algorithms
 
-```
+### Load Libraries
+
+```{r}
+## Load Libraries and prepare notebook
+
+# Load libraries
+library(dplyr)
+library(readr)
+library(tidyr)
+library(ggplot2)
+library(keras)
+library(xgboost)
+library(speedglm)
+library(purrr)
+library(glmnet)
+
+# doMC is not supported in Windows.  For Windows delete the next two lines.
+require(doMC) # Not available in Windows
+registerDoMC(cores=10) # Set to the available no. of cores
+
 
 ## Prepare Workbook
 p0=paste0
@@ -58,7 +79,7 @@ head(design)
 
 ```{r}
 incidence = get_incidence() # full data
-#incidence = get_incidence(train_val_test = c(.1,.1,.1)) #Select only 10% of the data
+incidence = get_incidence(train_val_test = c(.1,.1,.1)) #Select only 10% of the data
 
 
 # Scale all values except exposure and counts and response variables
@@ -422,7 +443,7 @@ ExpLayer <- R6::R6Class("CustomLayer",
                         ))
 layer_exp <- function(object, name = "exponent", trainable = FALSE) {
   create_layer(ExpLayer, object, list(
-    output_dim = NULL,
+    output_dim = as.integer(1),
     name = name,
     trainable = trainable
   ))
@@ -437,6 +458,7 @@ layer_exp <- function(object, name = "exponent", trainable = FALSE) {
 ```{r}
 # Load Database
 incidence = get_incidence()
+#incidence = get_incidence(train_val_test = c(0.1,0.1,0.1))
 
 # Scale all values except exposure and counts
 incidence_scaled = scale_data(incidence)
@@ -458,6 +480,7 @@ formula = Count_NH ~ -1 + offset(log(ActiveExposure)) +
   (Gender + IssueYear + IncurredAgeBucket  + PolicyYear + Marital_Status + Prem_Class + 
       Underwriting_Type + Cov_Type_Bucket + TQ_Status + NH_Orig_Daily_Ben_Bucket + NH_Ben_Period_Bucket + 
       NH_EP_Bucket  + Region)^2   + Infl_Rider + I(Duration^2) 
+
 
 ## Note: Keras adds an intercept term in automatically, so it is removed from the above formula in order not to be duplicated
 
@@ -954,36 +977,3 @@ ae_test = sum(res$Count_NH) / sum(res$preds)
 
 ```
 
-
-installed.packages(("dplyr", "readr", "tidyr", "ggplot2", "purrr", "glmnet"))
-```
-
-If you have Ubuntu installed, you can use the doMC packages to run the Lasso code in parallel.  Set the number of cores available to the desired level by adjusting the code in `ltc_note_book_02.Rmd` file.  If you have Windows, these two lines must be removed:
-
-```
-require(doMC) # Not available in Windows
-registerDoMC(cores=10) # Set to the available no. of cores
-
-```
-
-## Keras and Tensorflow
-
-Keras and Tensorflow need to be installed.  It is far easier to install Keras for use on a CPU, but this will substantially slow down the models realtive to using the GPU installation.
-
-Details on installing the packages can be found here:
-
-* https://tensorflow.rstudio.com/keras/
-* https://tensorflow.rstudio.com/keras/reference/install_keras.html
-
-
-You can use the following code to check whether you have a GPU or CPU installation for Tensorflow.  
-
-```
-library(tensorflow)  
-a = tf$constant(c(1.0, 2.0, 3.0, 4.0, 5.0, 6.0), shape=c(2, 3), name='a')
-b = tf$constant(c(1.0, 2.0, 3.0, 4.0, 5.0, 6.0), shape=c(3, 2), name='b')
-c = tf$matmul(a,b)
-sess = tf$Session(config=tf$ConfigProto(log_device_placement=TRUE))
-print(sess$run(c))
-
-```
