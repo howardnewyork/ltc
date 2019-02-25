@@ -22,6 +22,7 @@ library(readr)
 library(tidyr)
 library(ggplot2)
 library(keras)
+use_condaenv("r-tensorflow") # depending on your setup, this line might not be necessary
 library(xgboost)
 library(speedglm)
 library(purrr)

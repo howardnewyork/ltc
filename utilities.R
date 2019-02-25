@@ -5,7 +5,9 @@ library(readr)
 library(tidyr)
 library(ggplot2)
 
-library(keras)
+# library(keras)
+# use_condaenv("r-tensorflow") 
+
 
 library(xgboost)
 library(purrr)
@@ -128,14 +130,15 @@ load_incidence = function(){
 
 
 #' Loads the incidence tables and splits them into training, validation and test sets.
-get_incidence = function(train_val_test = c(0.8, 0.1, 0.1), seed = 1111){
+get_incidence = function(train_val_test = c(0.8, 0.1, 0.1), seed = 1112){
   # Load Database
   incidence = load_incidence()
   N= nrow(incidence)
   
   # Shuffle
-  if (!is.null(seed))
-    set.seed(1112)
+  if (!is.null(seed)){
+    set.seed(seed)
+  }
   
   incidence = incidence[sample(1:N, N, replace =F),]
   

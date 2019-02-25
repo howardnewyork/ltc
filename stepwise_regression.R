@@ -1,6 +1,12 @@
 ## Forward Stepwise Regression
 
+library(keras)
+use_condaenv("r-tensorflow") 
+
+library(pryr)
+
 #source('models_01.R')
+
 
 # Prepare Code
 p0=paste0
@@ -36,7 +42,9 @@ sortVars = function(vars){
 #' @param ... any additional parameters required by FUN
 #' @return  A list containing all models tested in the forward stepwise algorithm including the best fit model.  The components of the list are "all" and "best"
 #' @export
-forwardStepwise <- function(data, FUN, startFormula, endFormula, criterion, startResults = NULL, ...){
+forwardStepwise <- function(data, FUN, startFormula, endFormula, criterion, startResults = NULL, 
+                            epochs = 10, batch_size = 1024, 
+                            validation_split = 0.2, ...){
   
   allResults <- list()
   firstRun = TRUE
@@ -58,7 +66,15 @@ forwardStepwise <- function(data, FUN, startFormula, endFormula, criterion, star
   
   cat(" ####****  FORWARD STEPWISE REGRESSION ****####\n")
   
-  results <- FUN(data, startFormula, startResults, ...)
+  #####
+  print("~~~~~~~")
+  print(gc())
+  print(paste("Memory size: allResults:",object_size(allResults)))
+  print(paste("Memory used",mem_used()))
+  print("~~~~~~~")
+  ####
+  
+  results <- FUN(data, startFormula, startResults, epochs = epochs, batch_size = batch_size, validation_split=validation_split, ...)
   
   allResults <- list(all = list(results), best = results)
   bestCriterion <- results[[criterion]]
@@ -70,18 +86,32 @@ forwardStepwise <- function(data, FUN, startFormula, endFormula, criterion, star
     testVarsCurrent <- testVars
     runningFormula <- startFormula
     collectedCriteria = NULL
-    runningResults <- list()
+    #runningResults <- list()
     newPar = NULL
     while (length(testVarsCurrent)>0){
       runningFormula <- update(startFormula, as.formula(paste("~ . + ",testVarsCurrent[1])))
+      cat("\n")
+      cat("---------------------------------------------------------\n")
+      
+      #####
+      print("~~~~~~~")
+      print(gc())
+      print(paste("Memory size: allResults:",object_size(allResults)))
+      cat("Memory used: ")
+      print(mem_used())
+      print("~~~~~~~")
+      ####
+      
       cat(paste("Testing Formula:"))
       cat(paste(format(runningFormula), collapse = ""), "\n")
       results <- NULL
+      time1=Sys.time()
       try(
-        results <- FUN(data, runningFormula, startResults, ...)
+        results <- FUN(data, runningFormula, startResults, epochs = epochs, batch_size = batch_size, validation_split=validation_split, ...)
       )
+      time2=Sys.time(); print(paste("Time Taken:", time2-time1))
       if (!is.null(results)){
-        runningResults[[length(runningResults) + 1]] <- results
+        #runningResults[[length(runningResults) + 1]] <- results
         collectedCriteria <- c(collectedCriteria, results[[criterion]])
         cat(" Criterion: ", results[[criterion]], "\n")
         if (results[[criterion]] < bestCriterion){
@@ -90,6 +120,7 @@ forwardStepwise <- function(data, FUN, startFormula, endFormula, criterion, star
           best <- results
           save(best, file =paste0(output_dir,"best_stepwise.RData"))
         }
+        rm(results)
       } else {
         cat("formula skipped!!\n")
       }
@@ -116,9 +147,11 @@ forwardStepwise <- function(data, FUN, startFormula, endFormula, criterion, star
 
 
 #' Neural network model
-nn_model = function(data, formula, startResults, ...){
+nn_model = function(data, formula, startResults, epochs = 6, batch_size = 512, 
+                    validation_split = 0.2, ...){
   
   
+  set.seed(9999)
   
   design = model.matrix(formula, data)
   offset =log (data$ActiveExposure)
@@ -153,7 +186,7 @@ nn_model = function(data, formula, startResults, ...){
   # Model is compiled
   model %>% compile(
     loss = 'poisson',
-    optimizer = optimizer_adadelta()
+    optimizer = optimizer_adam()
   )
   
   #Model is run
@@ -161,8 +194,8 @@ nn_model = function(data, formula, startResults, ...){
   history <- model %>% fit(
     x = list(input_offset = offset, input_predictors = design),
     y= y,
-    epochs = 6, batch_size = 512, 
-    validation_split = 0.2,
+    epochs = epochs, batch_size = batch_size, 
+    validation_split = validation_split,
     verbose = 0
   )
   b=Sys.time(); b-a
@@ -173,7 +206,7 @@ nn_model = function(data, formula, startResults, ...){
   preds = model %>% predict(
     x=list(input_offset = offset, 
            input_predictors=design),
-    verbose=0, batch_size = 2048*16
+    verbose=0, batch_size = 1024*16
   ) %>% c()
   
   pnll_mean = poisson_neg_log_lik(y_pred = preds, y_true = y, eps=1e-8) 
@@ -190,8 +223,8 @@ nn_model = function(data, formula, startResults, ...){
 
 if (F){
   # Load Database
-  incidence = get_incidence()
-  incidence$train = incidence$train #[1:200000,]
+  incidence = get_incidence(seed = 1112)
+  incidence$train = incidence$train #[1:100000,]
   
   # Scale all values except exposure and counts
   incidence_scaled = scale_data(incidence)
@@ -216,63 +249,200 @@ if (F){
      Underwriting_Type + Cov_Type_Bucket + TQ_Status + NH_Orig_Daily_Ben_Bucket +         
      NH_EP_Bucket  + Region + IssueAgeBucket)   + I(IncurredAgeBucket^2)
   
-  formula_winning =   Count_NH ~ NH_Ben_Period_Bucket + Underwriting_Type + I(IncurredAgeBucket^2) + 
-    Region + IssueYear + IssueAgeBucket + Marital_Status + Cov_Type_Bucket + 
-    Prem_Class + NH_Orig_Daily_Ben_Bucket + IncurredAgeBucket + 
-    NH_EP_Bucket + Region:NH_Orig_Daily_Ben_Bucket + IncurredAgeBucket:Gender + 
-    PolicyYear:(Prem_Class + TQ_Status) + Underwriting_Type:PolicyYear  + 
-    Cov_Type_Bucket:IncurredAgeBucket + IncurredAgeBucket:NH_EP_Bucket + 
-    Marital_Status:IncurredAgeBucket + offset(log(ActiveExposure)) - 
-    1
   
-  formula_winning2 = Count_NH ~ NH_Ben_Period_Bucket + Underwriting_Type + I(IncurredAgeBucket^2) + 
-    Region + IssueYear + IssueAgeBucket + Marital_Status + Cov_Type_Bucket + 
-    Prem_Class + NH_Orig_Daily_Ben_Bucket + IncurredAgeBucket + 
-    NH_EP_Bucket + Region:NH_Orig_Daily_Ben_Bucket + IncurredAgeBucket:Gender + 
-    Prem_Class:PolicyYear + PolicyYear:TQ_Status + Underwriting_Type:PolicyYear + 
-    Cov_Type_Bucket:IncurredAgeBucket + IncurredAgeBucket:NH_EP_Bucket + 
-    Marital_Status:IncurredAgeBucket + IssueYear:NH_EP_Bucket + 
-    IssueYear:PolicyYear + NH_Ben_Period_Bucket:Underwriting_Type + 
-    Cov_Type_Bucket:TQ_Status + Cov_Type_Bucket:NH_Orig_Daily_Ben_Bucket + 
-    NH_Ben_Period_Bucket:Cov_Type_Bucket + Marital_Status:Cov_Type_Bucket + 
+  formula_winning = Count_NH ~ NH_Ben_Period_Bucket + Underwriting_Type + I(IncurredAgeBucket^2) + 
+    Region + IssueYear + Marital_Status + IssueAgeBucket + Prem_Class + 
+    NH_EP_Bucket + Cov_Type_Bucket + IncurredAgeBucket + Region:NH_Orig_Daily_Ben_Bucket + 
+    Gender:IncurredAgeBucket + Prem_Class:PolicyYear + Underwriting_Type:PolicyYear + 
+    PolicyYear:TQ_Status + Cov_Type_Bucket:IncurredAgeBucket + 
+    NH_EP_Bucket:IncurredAgeBucket + Marital_Status:IncurredAgeBucket + 
     offset(log(ActiveExposure)) - 1
   
-  formula_winning3 =   Count_NH ~ NH_Ben_Period_Bucket + Underwriting_Type + I(IncurredAgeBucket^2) + 
-    Region + IssueYear + IssueAgeBucket + Marital_Status + Cov_Type_Bucket + 
-    Prem_Class + NH_Orig_Daily_Ben_Bucket + IncurredAgeBucket + 
-    NH_EP_Bucket + Region:NH_Orig_Daily_Ben_Bucket + IncurredAgeBucket:Gender + 
-    Prem_Class:PolicyYear + PolicyYear:TQ_Status + Underwriting_Type:PolicyYear + 
-    Cov_Type_Bucket:IncurredAgeBucket + IncurredAgeBucket:NH_EP_Bucket + 
-    Marital_Status:IncurredAgeBucket + IssueYear:NH_EP_Bucket + 
-    IssueYear:PolicyYear + NH_Ben_Period_Bucket:Underwriting_Type + 
-    Cov_Type_Bucket:TQ_Status + Cov_Type_Bucket:NH_Orig_Daily_Ben_Bucket + 
-    NH_Ben_Period_Bucket:Cov_Type_Bucket + Marital_Status:Cov_Type_Bucket + 
-    NH_Ben_Period_Bucket:PolicyYear + IncurredAgeBucket:PolicyYear + 
-    NH_Ben_Period_Bucket:IncurredAgeBucket + offset(log(ActiveExposure)) - 
-    1
+  formula_ultimate = Count_NH ~ (NH_Ben_Period_Bucket + Underwriting_Type + 
+    Region + IssueYear + Marital_Status + IssueAgeBucket + Prem_Class + 
+    NH_EP_Bucket + Cov_Type_Bucket + IncurredAgeBucket)^2 + Region:NH_Orig_Daily_Ben_Bucket + 
+    Gender:IncurredAgeBucket + Prem_Class:PolicyYear + Underwriting_Type:PolicyYear + 
+    PolicyYear:TQ_Status + Cov_Type_Bucket:IncurredAgeBucket + 
+    NH_EP_Bucket:IncurredAgeBucket + Marital_Status:IncurredAgeBucket + 
+    I(IncurredAgeBucket^2) +
+    offset(log(ActiveExposure)) - 1
   
-  formula_winning4 =  Count_NH ~ NH_Ben_Period_Bucket + Underwriting_Type + I(IncurredAgeBucket^2) + 
-    Region + IssueYear + IssueAgeBucket + Marital_Status + Cov_Type_Bucket + 
-    Prem_Class + NH_Orig_Daily_Ben_Bucket + IncurredAgeBucket + 
-    NH_EP_Bucket + Region:NH_Orig_Daily_Ben_Bucket + IncurredAgeBucket:Gender + 
-    Prem_Class:PolicyYear + PolicyYear:TQ_Status + Underwriting_Type:PolicyYear + 
-    Cov_Type_Bucket:IncurredAgeBucket + IncurredAgeBucket:NH_EP_Bucket + 
-    Marital_Status:IncurredAgeBucket + IssueYear:NH_EP_Bucket + 
-    IssueYear:PolicyYear + NH_Ben_Period_Bucket:Underwriting_Type + 
-    Cov_Type_Bucket:TQ_Status + Cov_Type_Bucket:NH_Orig_Daily_Ben_Bucket + 
-    NH_Ben_Period_Bucket:Cov_Type_Bucket + Marital_Status:Cov_Type_Bucket + 
-    Region:Prem_Class + Underwriting_Type:IncurredAgeBucket + 
-    Underwriting_Type:Region + offset(log(ActiveExposure)) - 
-    1
+  formula_winning2 = Count_NH ~ NH_Ben_Period_Bucket + Underwriting_Type + I(IncurredAgeBucket^2) + 
+    Region + IssueYear + Marital_Status + IssueAgeBucket + Prem_Class + 
+    NH_EP_Bucket + Cov_Type_Bucket + IncurredAgeBucket + Region:NH_Orig_Daily_Ben_Bucket + 
+    IncurredAgeBucket:Gender + Prem_Class:PolicyYear + Underwriting_Type:PolicyYear + 
+    PolicyYear:TQ_Status + Cov_Type_Bucket:IncurredAgeBucket + 
+    NH_EP_Bucket:IncurredAgeBucket + Marital_Status:IncurredAgeBucket + 
+    Underwriting_Type:Cov_Type_Bucket + IssueYear:NH_EP_Bucket + 
+    Underwriting_Type:IssueAgeBucket + NH_EP_Bucket:Cov_Type_Bucket + 
+    NH_Ben_Period_Bucket:Underwriting_Type + Underwriting_Type:NH_EP_Bucket + 
+    IssueYear:IncurredAgeBucket + NH_Ben_Period_Bucket:Cov_Type_Bucket + 
+    IssueYear:IssueAgeBucket + NH_Ben_Period_Bucket:IncurredAgeBucket + 
+    Underwriting_Type:Prem_Class + IssueAgeBucket:Cov_Type_Bucket + 
+    offset(log(ActiveExposure)) - 1
   
-  formula_ultimate =   Count_NH ~      ( PolicyYear + NH_Ben_Period_Bucket + Underwriting_Type +
-    Region + IssueYear  + Marital_Status + Cov_Type_Bucket + 
-    Prem_Class + NH_Orig_Daily_Ben_Bucket + IncurredAgeBucket + 
-    NH_EP_Bucket + Gender + TQ_Status+ 
-    Marital_Status) ^2  + IssueAgeBucket + I(IncurredAgeBucket^2) + offset(log(ActiveExposure)) -
-    1
   
+  ################
+  # original version
+  # formula_winning =   Count_NH ~ NH_Ben_Period_Bucket + Underwriting_Type + I(IncurredAgeBucket^2) + 
+  #   Region + IssueYear + IssueAgeBucket + Marital_Status + Cov_Type_Bucket + 
+  #   Prem_Class + NH_Orig_Daily_Ben_Bucket + IncurredAgeBucket + 
+  #   NH_EP_Bucket + Region:NH_Orig_Daily_Ben_Bucket + IncurredAgeBucket:Gender + 
+  #   PolicyYear:(Prem_Class + TQ_Status) + Underwriting_Type:PolicyYear  + 
+  #   Cov_Type_Bucket:IncurredAgeBucket + IncurredAgeBucket:NH_EP_Bucket + 
+  #   Marital_Status:IncurredAgeBucket + offset(log(ActiveExposure)) - 
+  #   1
+  # 
+  # formula_winning2 = Count_NH ~ NH_Ben_Period_Bucket + Underwriting_Type + I(IncurredAgeBucket^2) + 
+  #   Region + IssueYear + IssueAgeBucket + Marital_Status + Cov_Type_Bucket + 
+  #   Prem_Class + NH_Orig_Daily_Ben_Bucket + IncurredAgeBucket + 
+  #   NH_EP_Bucket + Region:NH_Orig_Daily_Ben_Bucket + IncurredAgeBucket:Gender + 
+  #   Prem_Class:PolicyYear + PolicyYear:TQ_Status + Underwriting_Type:PolicyYear + 
+  #   Cov_Type_Bucket:IncurredAgeBucket + IncurredAgeBucket:NH_EP_Bucket + 
+  #   Marital_Status:IncurredAgeBucket + IssueYear:NH_EP_Bucket + 
+  #   IssueYear:PolicyYear + NH_Ben_Period_Bucket:Underwriting_Type + 
+  #   Cov_Type_Bucket:TQ_Status + Cov_Type_Bucket:NH_Orig_Daily_Ben_Bucket + 
+  #   NH_Ben_Period_Bucket:Cov_Type_Bucket + Marital_Status:Cov_Type_Bucket + 
+  #   offset(log(ActiveExposure)) - 1
+  # 
+  # formula_winning3 =   Count_NH ~ NH_Ben_Period_Bucket + Underwriting_Type + I(IncurredAgeBucket^2) + 
+  #   Region + IssueYear + IssueAgeBucket + Marital_Status + Cov_Type_Bucket + 
+  #   Prem_Class + NH_Orig_Daily_Ben_Bucket + IncurredAgeBucket + 
+  #   NH_EP_Bucket + Region:NH_Orig_Daily_Ben_Bucket + IncurredAgeBucket:Gender + 
+  #   Prem_Class:PolicyYear + PolicyYear:TQ_Status + Underwriting_Type:PolicyYear + 
+  #   Cov_Type_Bucket:IncurredAgeBucket + IncurredAgeBucket:NH_EP_Bucket + 
+  #   Marital_Status:IncurredAgeBucket + IssueYear:NH_EP_Bucket + 
+  #   IssueYear:PolicyYear + NH_Ben_Period_Bucket:Underwriting_Type + 
+  #   Cov_Type_Bucket:TQ_Status + Cov_Type_Bucket:NH_Orig_Daily_Ben_Bucket + 
+  #   NH_Ben_Period_Bucket:Cov_Type_Bucket + Marital_Status:Cov_Type_Bucket + 
+  #   NH_Ben_Period_Bucket:PolicyYear + IncurredAgeBucket:PolicyYear + 
+  #   NH_Ben_Period_Bucket:IncurredAgeBucket + offset(log(ActiveExposure)) - 
+  #   1
+  # 
+  # formula_winning4 =  Count_NH ~ NH_Ben_Period_Bucket + Underwriting_Type + I(IncurredAgeBucket^2) + 
+  #   Region + IssueYear + IssueAgeBucket + Marital_Status + Cov_Type_Bucket + 
+  #   Prem_Class + NH_Orig_Daily_Ben_Bucket + IncurredAgeBucket + 
+  #   NH_EP_Bucket + Region:NH_Orig_Daily_Ben_Bucket + IncurredAgeBucket:Gender + 
+  #   Prem_Class:PolicyYear + PolicyYear:TQ_Status + Underwriting_Type:PolicyYear + 
+  #   Cov_Type_Bucket:IncurredAgeBucket + IncurredAgeBucket:NH_EP_Bucket + 
+  #   Marital_Status:IncurredAgeBucket + IssueYear:NH_EP_Bucket + 
+  #   IssueYear:PolicyYear + NH_Ben_Period_Bucket:Underwriting_Type + 
+  #   Cov_Type_Bucket:TQ_Status + Cov_Type_Bucket:NH_Orig_Daily_Ben_Bucket + 
+  #   NH_Ben_Period_Bucket:Cov_Type_Bucket + Marital_Status:Cov_Type_Bucket + 
+  #   Region:Prem_Class + Underwriting_Type:IncurredAgeBucket + 
+  #   Underwriting_Type:Region + offset(log(ActiveExposure)) - 
+  #   1
+  # 
+  # formula_winning5 = Count_NH ~ NH_Ben_Period_Bucket + Underwriting_Type + I(IncurredAgeBucket^2) + 
+  #   Region + IssueYear + IssueAgeBucket + Marital_Status + Cov_Type_Bucket + 
+  #   Prem_Class + NH_Orig_Daily_Ben_Bucket + IncurredAgeBucket + 
+  #   NH_EP_Bucket + Region:NH_Orig_Daily_Ben_Bucket + IncurredAgeBucket:Gender + 
+  #   Prem_Class:PolicyYear + PolicyYear:TQ_Status + Underwriting_Type:PolicyYear + 
+  #   Cov_Type_Bucket:IncurredAgeBucket + IncurredAgeBucket:NH_EP_Bucket + 
+  #   Marital_Status:IncurredAgeBucket + IssueYear:NH_EP_Bucket + 
+  #   IssueYear:PolicyYear + NH_Ben_Period_Bucket:Underwriting_Type + 
+  #   Cov_Type_Bucket:TQ_Status + Cov_Type_Bucket:NH_Orig_Daily_Ben_Bucket + 
+  #   NH_Ben_Period_Bucket:Cov_Type_Bucket + Marital_Status:Cov_Type_Bucket + 
+  #   Region:Prem_Class + Underwriting_Type:IncurredAgeBucket + 
+  #   Underwriting_Type:Region + IssueYear:NH_Orig_Daily_Ben_Bucket + 
+  #   offset(log(ActiveExposure)) - 1
+  # 
+  # formula_winning6 = Count_NH ~ NH_Ben_Period_Bucket + Underwriting_Type + I(IncurredAgeBucket^2) + 
+  #   Region + IssueYear + IssueAgeBucket + Marital_Status + Cov_Type_Bucket + 
+  #   Prem_Class + NH_Orig_Daily_Ben_Bucket + IncurredAgeBucket + 
+  #   NH_EP_Bucket + Region:NH_Orig_Daily_Ben_Bucket + IncurredAgeBucket:Gender + 
+  #   Prem_Class:PolicyYear + PolicyYear:TQ_Status + Underwriting_Type:PolicyYear + 
+  #   Cov_Type_Bucket:IncurredAgeBucket + IncurredAgeBucket:NH_EP_Bucket + 
+  #   Marital_Status:IncurredAgeBucket + IssueYear:NH_EP_Bucket + 
+  #   IssueYear:PolicyYear + NH_Ben_Period_Bucket:Underwriting_Type + 
+  #   Cov_Type_Bucket:TQ_Status + Cov_Type_Bucket:NH_Orig_Daily_Ben_Bucket + 
+  #   NH_Ben_Period_Bucket:Cov_Type_Bucket + Marital_Status:Cov_Type_Bucket + 
+  #   Region:Prem_Class + Underwriting_Type:IncurredAgeBucket + 
+  #   Underwriting_Type:Region + IssueYear:NH_Orig_Daily_Ben_Bucket + 
+  #   NH_Orig_Daily_Ben_Bucket:TQ_Status + NH_Ben_Period_Bucket:PolicyYear + 
+  #   Cov_Type_Bucket:Gender + offset(log(ActiveExposure)) - 1
+  # 
+  # formula_winning7 = Count_NH ~ NH_Ben_Period_Bucket + Underwriting_Type + I(IncurredAgeBucket^2) + 
+  #   Region + IssueYear + IssueAgeBucket + Marital_Status + Cov_Type_Bucket + 
+  #   Prem_Class + NH_Orig_Daily_Ben_Bucket + IncurredAgeBucket + 
+  #   NH_EP_Bucket + Region:NH_Orig_Daily_Ben_Bucket + IncurredAgeBucket:Gender + 
+  #   Prem_Class:PolicyYear + PolicyYear:TQ_Status + Underwriting_Type:PolicyYear + 
+  #   Cov_Type_Bucket:IncurredAgeBucket + IncurredAgeBucket:NH_EP_Bucket + 
+  #   Marital_Status:IncurredAgeBucket + IssueYear:NH_EP_Bucket + 
+  #   IssueYear:PolicyYear + NH_Ben_Period_Bucket:Underwriting_Type + 
+  #   Cov_Type_Bucket:TQ_Status + Cov_Type_Bucket:NH_Orig_Daily_Ben_Bucket + 
+  #   NH_Ben_Period_Bucket:Cov_Type_Bucket + Marital_Status:Cov_Type_Bucket + 
+  #   Region:Prem_Class + Underwriting_Type:IncurredAgeBucket + 
+  #   Underwriting_Type:Region + IssueYear:NH_Orig_Daily_Ben_Bucket + 
+  #   NH_Orig_Daily_Ben_Bucket:TQ_Status + NH_Ben_Period_Bucket:PolicyYear + 
+  #   Cov_Type_Bucket:Gender + Marital_Status:PolicyYear + offset(log(ActiveExposure)) - 
+  #   1
+  # 
+  # formula_ultimate =   Count_NH ~      ( PolicyYear + NH_Ben_Period_Bucket + Underwriting_Type +
+  #   Region + IssueYear  + Marital_Status + Cov_Type_Bucket + 
+  #   Prem_Class + NH_Orig_Daily_Ben_Bucket + IncurredAgeBucket + 
+  #   NH_EP_Bucket + Gender + TQ_Status+ 
+  #   Marital_Status) ^2  + IssueAgeBucket + I(IncurredAgeBucket^2) + offset(log(ActiveExposure)) -
+  #   1
+  # 
 
+  
+  ################ 
+  # Fifth  Round:  Redundant?
+  # a=Sys.time()
+  # 
+  # y_true = incidence$val$Count_NH
+  # formula=formula_winning4
+  # a=Sys.time()
+  # ans = nn_model(incidence$train, formula = formula, epochs = 10, batch_size = 2048)
+  # b=Sys.time(); b-a
+  # 
+  # preds = ans$model %>% predict(
+  #   x=list(input_offset = log (incidence$val$ActiveExposure),
+  #          input_predictors=model.matrix(formula, incidence$val)),
+  #   verbose=0, batch_size = 1024*16
+  # ) %>% c()
+  # pnll_mean = poisson_neg_log_lik(y_pred = preds, y_true = y_true, eps=1e-8)
+  # pnll_mean
+  # ans$pnll_mean
+  # ans$aic
+  # 
+  # 
+  # y_true = incidence$val$Count_NH
+  # formula=formula_winning4
+  # ans_b = nn_model(incidence$train, formula = formula, epochs = 4)
+  # preds = ans_b$model %>% predict(
+  #   x=list(input_offset = log (incidence$val$ActiveExposure),
+  #          input_predictors=model.matrix(formula, incidence$val)),
+  #   verbose=0, batch_size = 1024*16
+  # ) %>% c()
+  # pnll_mean_b = poisson_neg_log_lik(y_pred = preds, y_true = y_true, eps=1e-8)
+  # pnll_mean_b
+  # ans_b$pnll_mean
+  # ans_b$aic
+  
+  
+  
+  # 
+  # formula=formula_winning
+  # ans7 = nn_model(incidence$train, formula = formula)
+  # preds = ans7$model %>% predict(
+  #   x=list(input_offset = log (incidence$val$ActiveExposure), 
+  #          input_predictors=model.matrix(formula, incidence$val)),
+  #   verbose=0, batch_size = 1024*16
+  # ) %>% c()
+  # pnll_mean = poisson_neg_log_lik(y_pred = preds, y_true = y_true, eps=1e-8) 
+  # pnll_mean
+  # ans7$pnll_mean
+  # ans7$aic
+  # 
+  # ans5 = forwardStepwise(data = incidence$train, startFormula = formula_winning5, endFormula = formula_ultimate, criterion = "aic", FUN = nn_model)
+  # ans6 = forwardStepwise(data = incidence$train, startFormula = formula_winning6, endFormula = formula_ultimate, criterion = "aic", FUN = nn_model)
+  # ans7 = forwardStepwise(data = incidence$train, startFormula = formula_winning7, endFormula = formula_ultimate, criterion = "aic", FUN = nn_model)
+  # b=Sys.time(); b-a
+  
+  
+  
   # formula_end = Count_NH ~ -1 + offset(log(ActiveExposure)) + 
   #   (Gender + IssueYear + IncurredAgeBucket  + PolicyYear + Marital_Status + Prem_Class + 
   #      Underwriting_Type + Cov_Type_Bucket + TQ_Status + NH_Orig_Daily_Ben_Bucket + NH_Ben_Period_Bucket +        
@@ -284,103 +454,55 @@ if (F){
   #   IncurredAgeBucket:Cov_Type_Bucket + IncurredAgeBucket:NH_EP_Bucket + IncurredAgeBucket:Gender +
   #   IncurredAgeBucket:Marital_Status + IssueYear + Marital_Status + Prem_Class
   
+  ################
+  
+  
   ##################################################333
   ################33  First Round
+  ## Selects single predictors without any interactions
   a=Sys.time()
   ans = forwardStepwise(data = incidence$train, startFormula = formula_soa, endFormula = formula_end, criterion = "aic", FUN = nn_model)
-  a=Sys.time(); b-a
-
+  b=Sys.time(); b-a
   
-  ans$best
-  model_soa = nn_model(incidence$train, formula = formula_soa)
-  model_soa$model
-  
-  y_true = incidence$val$Count_NH
-  
-  preds = model_soa$model %>% predict(
-    x=list(input_offset = log (incidence$val$ActiveExposure), 
-           input_predictors=model.matrix(formula_soa, incidence$val)),
-    verbose=0, batch_size = 2048*16
-  ) %>% c()
-  
-  pnll_mean = poisson_neg_log_lik(y_pred = preds, y_true = y_true, eps=1e-8) 
-  pnll_mean
-  
-  #model_best = nn_model(incidence$train, formula = best$formula)
-  model_best = nn_model(incidence$train, formula = ans$best$formula)
-  model_best
-  #save(model_best, file = paste0(output_dir, "stepwise_model_best.RData"))
-  
-  # PNLL Validation Set
-  preds = model_best$model %>% predict(
-    x=list(input_offset = log (incidence$val$ActiveExposure), 
-           input_predictors=model.matrix(model_best$formula, incidence$val)),
-    verbose=0, batch_size = 2048*16
-  ) %>% c()
-  
-  pnll_mean = poisson_neg_log_lik(y_pred = preds, y_true = y_true, eps=1e-8) 
-  pnll_mean
-
   
   ##################################################333
   ################ Second  Round
   a=Sys.time()
   ans = forwardStepwise(data = incidence$train, startFormula = formula_winning, endFormula = formula_ultimate, criterion = "aic", FUN = nn_model)
-  a=Sys.time(); b-a
-  
-  ################ Third  Round
-  a=Sys.time()
-  ans = forwardStepwise(data = incidence$train, startFormula = formula_winning2, endFormula = formula_ultimate, criterion = "aic", FUN = nn_model)
-  a=Sys.time(); b-a
-  
-  ################ Fourth  Round
-  a=Sys.time()
-  ans = forwardStepwise(data = incidence$train, startFormula = formula_winning3, endFormula = formula_ultimate, criterion = "aic", FUN = nn_model)
-  a=Sys.time(); b-a
-  
-  ################ Fifth  Round:  Redundant?
-  a=Sys.time()
-  ans = forwardStepwise(data = incidence$train, startFormula = formula_winning4, endFormula = formula_ultimate, criterion = "aic", FUN = nn_model)
-  a=Sys.time(); b-a
-  
-  save(ans, file = paste0(output_dir,"forwardStepwise_results.RData"))
-  #load(file = paste0(output_dir,"forwardStepwise_results.RData"))
+  b=Sys.time(); b-a
 
-  ans$best
   
-  model_soa = nn_model(incidence$train, formula = formula_soa)
-  model_soa$model
+  #save(ans, file = paste0(output_dir,"forwardStepwise_results.RData"))
+  #load(file = paste0(output_dir,"forwardStepwise_results.RData"))
   
-  y_true = incidence$val$Count_NH
+  load(paste0(output_dir,"best_stepwise.RData"))
   
-  preds = model_soa$model %>% predict(
-    x=list(input_offset = log (incidence$val$ActiveExposure), 
-           input_predictors=model.matrix(formula_soa, incidence$val)),
-    verbose=0, batch_size = 2048*16
-  ) %>% c()
   
-  pnll_mean = poisson_neg_log_lik(y_pred = preds, y_true = y_true, eps=1e-8) 
-  pnll_mean
+  #################
   
-  #model_best = nn_model(incidence$train, formula = best$formula)
-  model_best = nn_model(incidence$train, formula = ans$best$formula)
+  ##  Validation Score
+  model_best = nn_model(incidence$train, formula = best$formula)
+  #model_best = nn_model(incidence$train, formula = ans$best$formula)
   model_best
-  #save(model_best, file = paste0(output_dir, "stepwise_model_best.RData"))
   
+  # PNLL Validation Set
+  y_true_val = incidence$val$Count_NH
   preds = model_best$model %>% predict(
     x=list(input_offset = log (incidence$val$ActiveExposure), 
            input_predictors=model.matrix(model_best$formula, incidence$val)),
-    verbose=0, batch_size = 2048*16
+    verbose=0, batch_size = 1024*16
+    
   ) %>% c()
   
-  pnll_mean = poisson_neg_log_lik(y_pred = preds, y_true = y_true, eps=1e-8) 
+  pnll_mean = poisson_neg_log_lik(y_pred = preds, y_true = y_true_val, eps=1e-8) 
   pnll_mean
-  
+
+
   # PNLL Test Set
   preds_test = model_best$model %>% predict(
     x=list(input_offset = log (incidence$test$ActiveExposure), 
            input_predictors=model.matrix(model_best$formula, incidence$test)),
-    verbose=0, batch_size = 2048*16
+    verbose=0, batch_size = 1024*16
   ) %>% c()
   y_true_test = incidence$test$Count_NH
   
@@ -420,7 +542,6 @@ if (F){
     coord_cartesian(xlim = c(0,20), ylim = c(0.5,1.2))
   
   rate_plot
-  
   duration_plot
   ae_plot
     
